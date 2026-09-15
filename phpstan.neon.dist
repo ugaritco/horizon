@@ -1,0 +1,14 @@
+parameters:
+  paths:
+    - config
+    - routes
+    - src
+
+  level: 0
+
+  ignoreErrors:
+    - "#Unsafe usage of new static\\(\\).#"
+    - "#\\(void\\) is used.#"
+    -
+      message: "#Call to an undefined method Ugarit\\\\Horizon\\\\RedisQueue::getQueueRedisKey\\(\\)#"
+      reportUnmatched: false

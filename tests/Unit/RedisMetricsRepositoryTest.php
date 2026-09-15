@@ -1,0 +1,215 @@
+<?php
+
+namespace Ugarit\Horizon\Tests\Unit;
+
+use Heritage\Config\Repository as ConfigRepository;
+use Heritage\Container\Container;
+use Heritage\Contracts\Redis\Factory as RedisFactory;
+use Heritage\Redis\Connections\PhpRedisConnection;
+use Ugarit\Horizon\Repositories\RedisMetricsRepository;
+use Ugarit\Horizon\Tests\UnitTest;
+use Mockery;
+
+class RedisMetricsRepositoryTest extends UnitTest
+{
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $container = new Container;
+        $container->instance('config', new ConfigRepository([
+            'horizon.prefix' => 'horizon:',
+        ]));
+
+        Container::setInstance($container);
+    }
+
+    protected function tearDown(): void
+    {
+        Container::setInstance(null);
+
+        parent::tearDown();
+    }
+
+    public function test_clear_scans_prefixed_metric_patterns_by_default()
+    {
+        $repository = $this->redisMetricsRepositoryWithConnection(
+            $this->connectionForClearingMetrics([
+                'horizon:queue:*',
+                'horizon:job:*',
+                'horizon:snapshot:*',
+            ])
+        );
+
+        $repository->clear();
+
+        $this->assertTrue(true);
+    }
+
+    public function test_clear_uses_raw_metric_patterns_when_phpredis_scan_prefix_is_enabled()
+    {
+        $repository = $this->redisMetricsRepositoryWithConnection(
+            $this->connectionForClearingMetrics([
+                'queue:*',
+                'job:*',
+                'snapshot:*',
+            ]),
+            true
+        );
+
+        $repository->clear();
+
+        $this->assertTrue(true);
+    }
+
+    public function test_clear_starts_scan_with_null_for_phpredis_6_1_and_newer()
+    {
+        if (! extension_loaded('redis') || version_compare((string) phpversion('redis'), '6.1.0', '<')) {
+            $this->markTestSkipped('phpredis 6.1 or newer is required.');
+        }
+
+        $connection = Mockery::mock(PhpRedisConnection::class);
+
+        foreach (['last_snapshot_at', 'measured_jobs', 'measured_queues', 'metrics:snapshot'] as $key) {
+            $connection->shouldReceive('del')->once()->with($key);
+        }
+
+        foreach (['queue:*', 'job:*', 'snapshot:*'] as $pattern) {
+            $connection->shouldReceive('scan')
+                ->once()
+                ->with(null, ['match' => 'horizon:'.$pattern])
+                ->andReturn(false);
+        }
+
+        $repository = $this->redisMetricsRepositoryWithConnection($connection);
+
+        $repository->clear();
+
+        $this->assertTrue(true);
+    }
+
+    public function test_phpredis_scan_prefix_option_is_detected()
+    {
+        if (! defined('Redis::SCAN_PREFIX')) {
+            $this->markTestSkipped('The redis extension is required.');
+        }
+
+        $repository = $this->redisMetricsRepositoryDetectingScanPrefix(
+            $this->connectionWithPhpRedisScanOption(\Redis::SCAN_PREFIX)
+        );
+
+        $this->assertTrue($repository->detectsPhpRedisScanPrefix());
+    }
+
+    public function test_other_phpredis_scan_options_are_not_detected_as_scan_prefix()
+    {
+        if (! defined('Redis::SCAN_PREFIX') || ! defined('Redis::SCAN_NOPREFIX')) {
+            $this->markTestSkipped('The redis extension is required.');
+        }
+
+        $repository = $this->redisMetricsRepositoryDetectingScanPrefix(
+            $this->connectionWithPhpRedisScanOption(\Redis::SCAN_NOPREFIX)
+        );
+
+        $this->assertFalse($repository->detectsPhpRedisScanPrefix());
+    }
+
+    protected function connectionForClearingMetrics(array $patterns)
+    {
+        $connection = Mockery::mock();
+
+        foreach (['last_snapshot_at', 'measured_jobs', 'measured_queues', 'metrics:snapshot'] as $key) {
+            $connection->shouldReceive('del')->once()->with($key);
+        }
+
+        foreach ($patterns as $pattern) {
+            $connection->shouldReceive('scan')->once()->with(0, ['match' => $pattern])->andReturn([0, []]);
+        }
+
+        return $connection;
+    }
+
+    protected function connectionWithPhpRedisScanOption($option)
+    {
+        return new class($option)
+        {
+            public $option;
+
+            public function __construct($option)
+            {
+                $this->option = $option;
+            }
+
+            public function client()
+            {
+                return new class($this->option)
+                {
+                    public $option;
+
+                    public function __construct($option)
+                    {
+                        $this->option = $option;
+                    }
+
+                    public function getOption($option)
+                    {
+                        return $this->option;
+                    }
+                };
+            }
+        };
+    }
+
+    protected function redisMetricsRepositoryWithConnection($connection, $usesPhpRedisScanPrefix = false)
+    {
+        return new class(Mockery::mock(RedisFactory::class), $connection, $usesPhpRedisScanPrefix) extends RedisMetricsRepository
+        {
+            public $connection;
+
+            public $usesPhpRedisScanPrefix;
+
+            public function __construct($redis, $connection, $usesPhpRedisScanPrefix)
+            {
+                parent::__construct($redis);
+
+                $this->connection = $connection;
+                $this->usesPhpRedisScanPrefix = $usesPhpRedisScanPrefix;
+            }
+
+            public function connection()
+            {
+                return $this->connection;
+            }
+
+            protected function usesPhpRedisScanPrefix()
+            {
+                return $this->usesPhpRedisScanPrefix;
+            }
+        };
+    }
+
+    protected function redisMetricsRepositoryDetectingScanPrefix($connection)
+    {
+        return new class(Mockery::mock(RedisFactory::class), $connection) extends RedisMetricsRepository
+        {
+            public $connection;
+
+            public function __construct($redis, $connection)
+            {
+                parent::__construct($redis);
+
+                $this->connection = $connection;
+            }
+
+            public function connection()
+            {
+                return $this->connection;
+            }
+
+            public function detectsPhpRedisScanPrefix()
+            {
+                return $this->usesPhpRedisScanPrefix();
+            }
+        };
+    }
+}

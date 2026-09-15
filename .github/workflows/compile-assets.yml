@@ -1,0 +1,14 @@
+name: compile assets
+
+on: [push]
+
+permissions:
+  contents: write
+
+jobs:
+  compile:
+    uses: ugarit/.github/.github/workflows/compile-assets.yml@dd86ce0a18475504e42fa809d7454c1cb1a88028 # main
+    with:
+      cmd: build
+      build_path: "dist/"
+      node: "21"
